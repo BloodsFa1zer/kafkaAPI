@@ -155,8 +155,5 @@ func simulate() {
 		logger.Fatalw("shutdown error", "err", err)
 	}
 
-	if err := <-runDone; err != nil {
-		logger.Fatalw("consumer stopped with error", "err", err)
-	}
 	logger.Infow("simulation complete")
 }

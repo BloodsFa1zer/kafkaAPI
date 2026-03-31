@@ -389,3 +389,110 @@ func TestConsumerRetryThenSucceed(t *testing.T) {
 
 	assert.Equal(t, int32(3), attempts.Load())
 }
+
+// but
+func TestSkipFirstFiveCommitSecondFive(t *testing.T) {
+	brokers, topic := setup(t, 1)
+
+	var msgs []producer.Message
+	for i := range 10 {
+		msgs = append(msgs, producer.Message{
+			Key:   []byte(fmt.Sprintf("msg-%d", i)),
+			Value: []byte(fmt.Sprintf("val-%d", i)),
+		})
+	}
+	publish(t, brokers, topic, msgs...)
+
+	// first consumer: skip first 5, commit second 5
+
+	var mu sync.Mutex
+	var firstRunKeys []string
+	var seen atomic.Int32
+	allProcessed := make(chan struct{})
+
+	c1, err := consumer.New(
+		consumer.Config{
+			Brokers:      brokers,
+			Topic:        topic,
+			GroupID:      "test-skip-" + topic,
+			StartOffset:  kafka.FirstOffset,
+			WorkersCount: 1,
+		},
+		func(_ context.Context, msg consumer.Message) error {
+			mu.Lock()
+			firstRunKeys = append(firstRunKeys, string(msg.Key))
+			mu.Unlock()
+
+			n := seen.Add(1)
+			if n <= 5 {
+				return consumer.ErrForRetry
+			}
+			if n == 10 {
+				close(allProcessed)
+			}
+			return nil
+		},
+	)
+	require.NoError(t, err)
+
+	go c1.Run()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	select {
+	case <-allProcessed:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for first consumer to process 10 messages")
+	}
+
+	shutdown(t, c1)
+
+	t.Logf("first consumer saw: %v", firstRunKeys)
+	assert.Len(t, firstRunKeys, 10)
+
+	// second consumer: same group, reconnect
+
+	var mu2 sync.Mutex
+	var secondRunKeys []string
+	gotMessage := make(chan struct{}, 1)
+
+	c2, err := consumer.New(
+		consumer.Config{
+			Brokers:      brokers,
+			Topic:        topic,
+			GroupID:      "test-skip-" + topic, // same group
+			StartOffset:  kafka.FirstOffset,
+			WorkersCount: 1,
+		},
+		func(_ context.Context, msg consumer.Message) error {
+			mu2.Lock()
+			secondRunKeys = append(secondRunKeys, string(msg.Key))
+			mu2.Unlock()
+
+			select {
+			case gotMessage <- struct{}{}:
+			default:
+			}
+			return nil
+		},
+	)
+	require.NoError(t, err)
+
+	go c2.Run()
+
+	select {
+	case <-gotMessage:
+		// something was re-delivered
+	case <-time.After(10 * time.Second):
+		// nothing re-delivered
+	}
+
+	shutdown(t, c2)
+
+	mu2.Lock()
+	defer mu2.Unlock()
+	t.Logf("second consumer saw: %v", secondRunKeys)
+
+	assert.Empty(t, secondRunKeys)
+}

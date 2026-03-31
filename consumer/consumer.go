@@ -16,7 +16,6 @@ import (
 // ErrForRetry used to avoid message commit, so that after next rebalance we can try to commit message again
 var ErrForRetry = errors.New("for retry")
 
-// todo: прочитати 10 повідомлень скіпнути перші 5 прочитати другі 5, глянути що буде після реконектну.
 type Message struct {
 	Key       []byte
 	Value     []byte
