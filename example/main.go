@@ -144,7 +144,18 @@ func simulate() {
 		logger.Fatalw("create consumer", "err", err)
 	}
 
-	if err := c.Run(ctx); err != nil {
+	runDone := make(chan error, 1)
+	go func() { runDone <- c.Run() }()
+
+	<-ctx.Done()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := c.Shutdown(shutdownCtx); err != nil {
+		logger.Fatalw("shutdown error", "err", err)
+	}
+
+	if err := <-runDone; err != nil {
 		logger.Fatalw("consumer stopped with error", "err", err)
 	}
 	logger.Infow("simulation complete")

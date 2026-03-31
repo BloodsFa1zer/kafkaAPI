@@ -145,7 +145,7 @@ func TestProduceAndConsume(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	go c.Run(ctx)
+	go c.Run()
 
 	select {
 	case <-allReceived:
@@ -174,7 +174,7 @@ func TestConsumerShutdown(t *testing.T) {
 	require.NoError(t, err)
 
 	done := make(chan error, 1)
-	go func() { done <- c.Run(context.Background()) }()
+	go func() { done <- c.Run() }()
 
 	time.Sleep(2 * time.Second)
 	shutdown(t, c)
@@ -232,7 +232,7 @@ func TestConsumerDLQ(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	go c.Run(ctx)
+	go c.Run()
 
 	select {
 	case <-dlq.ch:
@@ -276,10 +276,8 @@ func TestShutdownWaits(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	runCtx, cancelRun := context.WithCancel(context.Background())
-	defer cancelRun()
 	runDone := make(chan error, 1)
-	go func() { runDone <- c.Run(runCtx) }()
+	go func() { runDone <- c.Run() }()
 
 	select {
 	case <-handlerStarted:
@@ -287,13 +285,13 @@ func TestShutdownWaits(t *testing.T) {
 		t.Fatal("handler never started")
 	}
 
-	cancelRun()
+	shutdown(t, c)
 
 	select {
 	case err := <-runDone:
 		require.NoError(t, err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("Run did not return after ctx cancellation")
+		t.Fatal("Run did not return after Shutdown")
 	}
 
 	assert.True(t, handlerCompleted)
@@ -327,10 +325,8 @@ func TestGracefulTimeoutCancels(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	runCtx, cancelRun := context.WithCancel(context.Background())
-	defer cancelRun()
 	runDone := make(chan error, 1)
-	go func() { runDone <- c.Run(runCtx) }()
+	go func() { runDone <- c.Run() }()
 
 	select {
 	case <-handlerStarted:
@@ -338,7 +334,7 @@ func TestGracefulTimeoutCancels(t *testing.T) {
 		t.Fatal("handler never started")
 	}
 
-	cancelRun()
+	shutdown(t, c)
 
 	select {
 	case <-runDone:
@@ -381,7 +377,7 @@ func TestConsumerRetryThenSucceed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	go c.Run(ctx)
+	go c.Run()
 
 	select {
 	case <-done:

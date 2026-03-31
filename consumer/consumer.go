@@ -16,6 +16,7 @@ import (
 // ErrForRetry used to avoid message commit, so that after next rebalance we can try to commit message again
 var ErrForRetry = errors.New("for retry")
 
+// todo: прочитати 10 повідомлень скіпнути перші 5 прочитати другі 5, глянути що буде після реконектну.
 type Message struct {
 	Key       []byte
 	Value     []byte
@@ -122,30 +123,18 @@ func New(cfg Config, handler HandlerFunc, mw ...Middleware) (*Consumer, error) {
 	}, nil
 }
 
-func (c *Consumer) Run(ctx context.Context) error {
+func (c *Consumer) Run() error {
 	defer close(c.doneC)
-
-	readCtx, cancelRead := context.WithCancel(context.Background())
-	defer cancelRead()
-
-	processCtx, cancelProcess := context.WithCancel(context.Background())
-	defer cancelProcess()
-
-	workersDone := make(chan struct{})
-
-	go c.awaitShutdown(ctx, workersDone, cancelRead, cancelProcess)
 
 	var errG errgroup.Group
 
 	for i := range c.cfg.WorkersCount {
 		errG.Go(func() error {
-			return c.worker(readCtx, processCtx, i)
+			return c.worker(i)
 		})
 	}
 
-	err := errG.Wait()
-	close(workersDone)
-	return err
+	return errG.Wait()
 }
 
 func (c *Consumer) Shutdown(ctx context.Context) error {
@@ -158,27 +147,22 @@ func (c *Consumer) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (c *Consumer) awaitShutdown(ctx context.Context, workersDone <-chan struct{}, cancelRead, cancelProcess context.CancelFunc) {
-	select {
-	case <-c.shutdownC: // catch shutdown() case
-		cancelRead()
-	case <-ctx.Done(): // main ctx cancelled
-		cancelRead()
-	case <-workersDone:
-		return
-	}
+func (c *Consumer) worker(id int) error {
+	readCtx, cancelRead := context.WithCancel(context.Background())
+	processCtx, cancelProcess := context.WithCancel(context.Background())
+	defer cancelProcess()
+	defer cancelRead()
 
-	timer := time.NewTimer(c.cfg.GracefulTimeout)
-	defer timer.Stop()
-	select {
-	case <-timer.C: // exceed graceful period
-		cancelProcess()
-	case <-workersDone: // workers drained before timeout
-		cancelProcess()
-	}
-}
+	go func() {
+		<-c.shutdownC
+		cancelRead()
 
-func (c *Consumer) worker(readCtx, processCtx context.Context, id int) error {
+		timer := time.NewTimer(c.cfg.GracefulTimeout)
+		defer timer.Stop()
+		<-timer.C
+		cancelProcess()
+	}()
+
 	rcfg := kafka.ReaderConfig{
 		Brokers:          c.cfg.Brokers,
 		Topic:            c.cfg.Topic,
